@@ -1223,6 +1223,71 @@ async function deleteUserDoc(uid){await db.collection('users').doc(uid).delete()
 function esc(s){if(!s)return'';return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function copyText(t){navigator.clipboard.writeText(t).then(()=>showToast('Copied to clipboard.'));}
 function showToast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
+
+// ── IN-APP NOTIFICATIONS (Firestore-based, free plan, real-time)
+function listenForNotifications(){
+  if(!currentUser)return;
+  db.collection('notifications').where('toUid','==',currentUser.uid).where('read','==',false)
+    .onSnapshot(snap=>{
+      snap.docChanges().forEach(ch=>{
+        if(ch.type==='added'){
+          const n=ch.doc.data();
+          showNotifToast(n.title,n.body);
+          if(document.hidden&&Notification.permission==='granted'){try{new Notification(n.title,{body:n.body});}catch(e){}}
+          ch.doc.ref.update({read:true});
+        }
+      });
+    });
+  const role=currentProfile.role;
+  if(role==='admin'||role==='superadmin'){
+    db.collection('notifications').where('toRole','==','admins').where('read','==',false)
+      .onSnapshot(snap=>{
+        snap.docChanges().forEach(ch=>{
+          if(ch.type==='added'){
+            const n=ch.doc.data();
+            if(n.fromName!==currentProfile.name){
+              showNotifToast(n.title,n.body);
+              if(document.hidden&&Notification.permission==='granted'){try{new Notification(n.title,{body:n.body});}catch(e){}}
+            }
+            ch.doc.ref.update({read:true});
+          }
+        });
+      });
+  }
+}
+
+async function notifyUser(targetName,title,body){
+  try{
+    const target=allUsers.find(u=>u.name===targetName);
+    if(!target||target.id===currentUser.uid)return;
+    await db.collection('notifications').add({toUid:target.id,toName:targetName,fromName:currentProfile.name,title,body,read:false,createdAt:new Date().toISOString()});
+  }catch(e){}
+}
+
+async function notifyAdmins(title,body){
+  try{
+    await db.collection('notifications').add({toRole:'admins',fromName:currentProfile.name||'System',title,body,read:false,createdAt:new Date().toISOString()});
+  }catch(e){}
+}
+
+function showNotifToast(title,body){
+  const old=document.getElementById('notif-pop');if(old)old.remove();
+  const el=document.createElement('div');el.id='notif-pop';
+  el.style.cssText='position:fixed;top:1rem;right:1rem;background:#1A1A18;color:#F0EFE8;border:0.5px solid rgba(255,255,255,0.18);border-radius:10px;padding:12px 16px;max-width:300px;z-index:99999;box-shadow:0 4px 20px rgba(0,0,0,0.6);cursor:pointer;';
+  el.innerHTML='<div style="font-size:13px;font-weight:500;margin-bottom:3px;color:#F0EFE8;">'+esc(title)+'</div><div style="font-size:12px;color:#9A9890;">'+esc(body)+'</div><div style="font-size:10px;color:#6A6860;margin-top:5px;">Tap to dismiss</div>';
+  el.onclick=()=>el.remove();
+  document.body.appendChild(el);
+  setTimeout(()=>{if(el.parentNode)el.remove();},7000);
+}
+
+async function initPush(){
+  try{
+    if(!('Notification' in window))return;
+    await Notification.requestPermission();
+  }catch(e){}
+}
+
+console.log('Muse Hub loaded. Notifications active.');
 </script>
 </body>
 </html>
