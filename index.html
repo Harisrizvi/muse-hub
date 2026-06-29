@@ -642,10 +642,20 @@ async function launchApp(){
   document.getElementById('hd-role').textContent=roleLabel(role);
   document.getElementById('hd-av').textContent=(currentProfile.name||'?').charAt(0).toUpperCase();
   document.querySelectorAll('.admin-only').forEach(el=>el.style.display=isAdminPlus?'':'none');
-  // Load this user's personal vault password hash from their user doc
+  // Vault tab: visible only to SA or users explicitly granted vault access
+  const vaultTab=document.querySelector('.tb[data-tab="vault"]');
+  if(vaultTab){
+    const hasVaultAccess=role==='superadmin'||currentProfile.vaultAccess===true;
+    vaultTab.style.display=hasVaultAccess?'':'none';
+  }
+  // Load this user's vault access and personal password hash
   try{
     const usnap=await db.collection('users').doc(currentUser.uid).get();
-    if(usnap.exists)sharedVaultHash=usnap.data().vaultPwHash||null;
+    if(usnap.exists){
+      currentProfile.vaultAccess=usnap.data().vaultAccess||false;
+      currentProfile.vaultPwHash=usnap.data().vaultPwHash||null;
+      sharedVaultHash=currentProfile.vaultPwHash;
+    }
   }catch(e){}
   db.collection('users').onSnapshot(snap=>{
     allUsers=[];snap.forEach(d=>{const u={id:d.id,...d.data()};if(u.role!=='pending')allUsers.push(u);});
@@ -1061,15 +1071,19 @@ async function setVaultPw(){
   const hash=await sha256(p1);
   // Store each user's vault password hash in their own user document
   await db.collection('users').doc(currentUser.uid).update({vaultPwHash:hash});
-  sharedVaultHash=hash;err.textContent='';document.getElementById('vault-new-pw1').value='';document.getElementById('vault-new-pw2').value='';
+  sharedVaultHash=hash;currentProfile.vaultPwHash=hash;
+  err.textContent='';document.getElementById('vault-new-pw1').value='';document.getElementById('vault-new-pw2').value='';
   vaultUnlocked=true;addLog('set their vault password','');scheduleSave();renderVaultGate();showToast('Vault password set.');
 }
 async function unlockVault(){
   const pw=document.getElementById('vault-pw-inp').value,err=document.getElementById('vault-err');
-  if(!pw){err.textContent='Enter the vault password.';return;}
+  if(!pw){err.textContent='Enter your vault password.';return;}
   const hash=await sha256(pw);
-  if(hash===sharedVaultHash){vaultUnlocked=true;err.textContent='';document.getElementById('vault-pw-inp').value='';addLog('unlocked vault','');scheduleSave();renderVaultGate();}
-  else{err.textContent='Incorrect vault password.';document.getElementById('vault-pw-inp').value='';}
+  const correctHash=currentProfile.vaultPwHash||sharedVaultHash;
+  if(hash===correctHash){
+    vaultUnlocked=true;err.textContent='';document.getElementById('vault-pw-inp').value='';
+    addLog('unlocked vault','');scheduleSave();renderVaultGate();
+  }else{err.textContent='Incorrect vault password.';document.getElementById('vault-pw-inp').value='';}
 }
 function lockVault(){vaultUnlocked=false;renderVaultGate();}
 function showChangeVaultPw(){
@@ -1147,13 +1161,23 @@ function makeUserCard(u){
       if(u.role!=='superadmin')actions.appendChild(mkBtn('Remove','danger',()=>{if(confirm('Remove '+u.name+'?'))deleteUserDoc(u.id);}));
     }
     if((myRole==='superadmin'||myRole==='admin')&&u.role==='staff')actions.appendChild(mkBtn('Make admin','',()=>setRole(u.id,'admin')));
-    // Super admin can reset anyone's vault password
-    if(myRole==='superadmin'&&!isSelf&&u.role!=='pending'){
-      actions.appendChild(mkBtn('Reset vault pw','',async()=>{
-        if(!confirm('Reset vault password for '+u.name+'? They will need to set a new one.'))return;
-        await db.collection('users').doc(u.id).update({vaultPwHash:null});
-        addLog('reset vault password for',u.name);scheduleSave();showToast('Vault password reset for '+u.name+'.');
-      }));
+    // Super admin: grant/revoke vault access and reset vault password
+    if(myRole==='superadmin'&&!isSelf&&u.role!=='pending'&&u.role!=='superadmin'){
+      const hasVault=u.vaultAccess===true;
+      const vaultBtn=mkBtn(hasVault?'Revoke vault access':'Grant vault access',hasVault?'danger':'',async()=>{
+        const newAccess=!hasVault;
+        await db.collection('users').doc(u.id).update({vaultAccess:newAccess,vaultPwHash:null});
+        addLog((newAccess?'granted':'revoked')+' vault access for',u.name);
+        scheduleSave();showToast('Vault access '+(newAccess?'granted to':'revoked from')+' '+u.name+'.');
+      });
+      actions.appendChild(vaultBtn);
+      if(hasVault){
+        actions.appendChild(mkBtn('Reset vault pw','',async()=>{
+          if(!confirm('Reset vault password for '+u.name+'? They will need to set a new one.'))return;
+          await db.collection('users').doc(u.id).update({vaultPwHash:null});
+          addLog('reset vault password for',u.name);scheduleSave();showToast('Vault password reset for '+u.name+'.');
+        }));
+      }
     }
   }
   card.appendChild(av);card.appendChild(info);card.appendChild(badge);card.appendChild(actions);return card;
