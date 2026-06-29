@@ -474,6 +474,7 @@ body{background:var(--bg);color:var(--ink);font-family:'Inter',sans-serif;min-he
       </div>
       <div class="vault-err" id="vault-err"></div>
       <div class="vault-info" id="vault-info"></div>
+      <button id="vault-reset-own-btn" onclick="resetOwnVaultPw()" style="display:none;margin-top:.5rem;font-size:11px;color:var(--ink4);background:none;border:none;cursor:pointer;text-decoration:underline;font-family:Inter,sans-serif;">Forgot your vault password? Reset it</button>
     </div>
     <div class="vault-body" id="vault-body">
       <div class="vault-topbar">
@@ -642,21 +643,22 @@ async function launchApp(){
   document.getElementById('hd-role').textContent=roleLabel(role);
   document.getElementById('hd-av').textContent=(currentProfile.name||'?').charAt(0).toUpperCase();
   document.querySelectorAll('.admin-only').forEach(el=>el.style.display=isAdminPlus?'':'none');
-  // Vault tab: visible only to SA or users explicitly granted vault access
+  // Vault tab: visible to SA always, and to users explicitly granted vault access
   const vaultTab=document.querySelector('.tb[data-tab="vault"]');
   if(vaultTab){
     const hasVaultAccess=role==='superadmin'||currentProfile.vaultAccess===true;
-    vaultTab.style.display=hasVaultAccess?'':'none';
+    vaultTab.style.display=(isAdminPlus&&hasVaultAccess)?'':'none';
   }
-  // Load this user's vault access and personal password hash
+  // Load this user's vault access and personal password hash fresh from Firestore
   try{
     const usnap=await db.collection('users').doc(currentUser.uid).get();
     if(usnap.exists){
-      currentProfile.vaultAccess=usnap.data().vaultAccess||false;
-      currentProfile.vaultPwHash=usnap.data().vaultPwHash||null;
-      sharedVaultHash=currentProfile.vaultPwHash;
+      const udata=usnap.data();
+      currentProfile.vaultAccess=udata.vaultAccess||false;
+      currentProfile.vaultPwHash=udata.vaultPwHash||null;
+      sharedVaultHash=currentProfile.vaultPwHash||null;
     }
-  }catch(e){}
+  }catch(e){console.log('vault load err',e);}
   db.collection('users').onSnapshot(snap=>{
     allUsers=[];snap.forEach(d=>{const u={id:d.id,...d.data()};if(u.role!=='pending')allUsers.push(u);});
     if(document.getElementById('pane-admin').style.display!=='none')renderAdmin();
@@ -1070,10 +1072,18 @@ async function setVaultPw(){
   if(!p1){err.textContent='Enter a password.';return;}if(p1!==p2){err.textContent='Passwords do not match.';return;}if(p1.length<4){err.textContent='At least 4 characters.';return;}
   const hash=await sha256(p1);
   // Store each user's vault password hash in their own user document
-  await db.collection('users').doc(currentUser.uid).update({vaultPwHash:hash});
-  sharedVaultHash=hash;currentProfile.vaultPwHash=hash;
-  err.textContent='';document.getElementById('vault-new-pw1').value='';document.getElementById('vault-new-pw2').value='';
-  vaultUnlocked=true;addLog('set their vault password','');scheduleSave();renderVaultGate();showToast('Vault password set.');
+  await db.collection('users').doc(currentUser.uid).update({vaultPwHash:hash,vaultAccess:true});
+  sharedVaultHash=hash;
+  currentProfile.vaultPwHash=hash;
+  currentProfile.vaultAccess=true;
+  err.textContent='';
+  document.getElementById('vault-new-pw1').value='';
+  document.getElementById('vault-new-pw2').value='';
+  vaultUnlocked=true;
+  addLog('set their vault password','');
+  scheduleSave();
+  renderVaultGate();
+  showToast('Vault password set. You are now inside the vault.');
 }
 async function unlockVault(){
   const pw=document.getElementById('vault-pw-inp').value,err=document.getElementById('vault-err');
@@ -1094,6 +1104,15 @@ function showChangeVaultPw(){
   document.getElementById('vault-body').style.display='none';document.getElementById('vault-gate').style.display='flex';
   document.getElementById('vault-new-pw1').value='';document.getElementById('vault-new-pw2').value='';
 }
+async function resetOwnVaultPw(){
+  if(!confirm('Reset your vault password? You will need to set a new one to access the vault again.'))return;
+  await db.collection('users').doc(currentUser.uid).update({vaultPwHash:null});
+  sharedVaultHash=null;currentProfile.vaultPwHash=null;vaultUnlocked=false;
+  addLog('reset their own vault password','');scheduleSave();
+  showToast('Vault password cleared. Please set a new one.');
+  renderVaultGate();
+}
+
 async function sha256(str){
   const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(str+'muse_vault_v2'));
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
