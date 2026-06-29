@@ -11,6 +11,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 :root{
@@ -288,6 +289,7 @@ body{background:var(--bg);color:var(--ink);font-family:'Inter',sans-serif;min-he
 .lightbox.show{display:flex;}
 .lightbox img{max-width:100%;max-height:90vh;object-fit:contain;border-radius:var(--radius);}
 .lightbox-close{position:fixed;top:1rem;right:1rem;font-size:28px;color:var(--ink3);background:none;border:none;cursor:pointer;line-height:1;}
+@keyframes slideIn{from{transform:translateX(120%);opacity:0;}to{transform:translateX(0);opacity:1;}}
 @media(max-width:520px){
   .vault-form,.upload-form{grid-template-columns:1fr;}
   .vault-form .full,.upload-form .full{grid-column:1;}
@@ -370,7 +372,7 @@ body{background:var(--bg);color:var(--ink);font-family:'Inter',sans-serif;min-he
     <button class="tb" data-tab="receipts" onclick="switchTab('receipts')">Receipts</button>
     <button class="tb" data-tab="ai" onclick="switchTab('ai')">✦ AI Assistant</button>
     <button class="tb admin-only" data-tab="vault" onclick="switchTab('vault')" style="display:none">Vault</button>
-    <button class="tb admin-only" data-tab="admin" onclick="switchTab('admin')" style="display:none">Admin</button>
+    <button class="tb admin-only" data-tab="admin" onclick="switchTab('admin')" style="display:none" id="admin-tab">Admin <span class="badge" id="admin-badge" style="display:none">0</span></button>
   </div>
   <div class="sync-bar">
     <div class="sync-dot" id="sync-dot"></div>
@@ -608,7 +610,10 @@ async function doSignUp(){
     const cred=await auth.createUserWithEmailAndPassword(email,pw);
     const isSA=email.toLowerCase()===SUPER_ADMIN_EMAIL.toLowerCase();
     await db.collection('users').doc(cred.user.uid).set({name,email,role:isSA?'superadmin':'pending',createdAt:firebase.firestore.FieldValue.serverTimestamp()});
-    if(!isSA){msg.textContent='Request sent. An admin will approve your account.';msg.className='auth-msg ok';}
+    if(!isSA){
+      msg.textContent='Request sent. An admin will approve your account.';msg.className='auth-msg ok';
+      try{await db.collection('notifications').add({toRole:'admins',fromName:name,title:'New access request',body:name+' has requested access to Muse Hub.',read:false,createdAt:new Date().toISOString()});}catch(e){}
+    }
   }catch(e){msg.textContent=friendlyErr(e.code);msg.className='auth-msg err';}
 }
 async function doSignOut(){
@@ -667,6 +672,9 @@ async function launchApp(){
     allUsers=[];snap.forEach(d=>{const u={id:d.id,...d.data()};if(u.role!=='pending')allUsers.push(u);});
     if(document.getElementById('pane-admin').style.display!=='none')renderAdmin();
     updateMyTasksBadge();
+    const pc=allUsers.filter(u=>u.role==='pending').length;
+    const ab=document.getElementById('admin-badge');
+    if(ab){ab.textContent=pc;ab.style.display=pc?'':'none';}
   });
   receiptUnsub=db.collection('receipts').orderBy('addedAt','desc').onSnapshot(snap=>{
     window._receipts=[];snap.forEach(d=>window._receipts.push({id:d.id,...d.data()}));
@@ -681,6 +689,8 @@ async function launchApp(){
   }
   await initCloud();
   addLog('signed in','');scheduleSave();
+  listenForNotifications();
+  initPush();
 }
 function roleLabel(r){return{superadmin:'Super Admin',admin:'Admin',staff:'Staff',pending:'Pending'}[r]||r;}
 
@@ -806,7 +816,7 @@ function assignTask(catId,taskId,assigneeName){
   const cat=appData.categories.find(c=>c.id===catId);if(!cat)return;
   const task=cat.tasks.find(t=>t.id===taskId);if(!task)return;
   task.assignedTo=assigneeName||null;task.assignedBy=assigneeName?(currentProfile.name||'Unknown'):null;
-  if(assigneeName)addLog('assigned "'+task.name+'" to',assigneeName);else addLog('unassigned task:',task.name);
+  if(assigneeName){addLog('assigned "'+task.name+'" to',assigneeName);notifyUser(assigneeName,'Task assigned to you',currentProfile.name+' assigned you: '+task.name);}else addLog('unassigned task:',task.name);
   scheduleSave();renderTasks();updateMyTasksBadge();
   if(document.getElementById('pane-mytasks').style.display!=='none')renderMyTasks();
 }
