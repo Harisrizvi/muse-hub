@@ -1,0 +1,14 @@
+{
+  "version": "2.1.0",
+  "built": "2026-06-30",
+  "changes": [
+    "Fixed vault: each user sets their own personal password",
+    "Super admin grants/revokes vault access per user from admin panel",
+    "Vault tab hidden from users without access",
+    "Gemini AI assistant knows tasks and payments",
+    "Task ownership: only creator or super admin can edit/delete",
+    "Receipts synced via Firestore across all devices",
+    "Credentials synced via Firestore across all devices",
+    "No-cache headers to force latest version on load"
+  ]
+}
