@@ -463,7 +463,7 @@ body{background:var(--bg);color:var(--ink);font-family:'Inter',sans-serif;min-he
       <div class="vault-gate-title">Credentials vault</div>
       <div class="vault-gate-sub" id="vault-gate-sub">Enter the shared vault password.</div>
       <div id="vault-setup-wrap" style="display:none;width:100%;max-width:340px;flex-direction:column;gap:8px;align-items:center;">
-        <p style="font-size:12px;color:var(--ink3);text-align:center;">Set a shared vault password for all admins.</p>
+        <p style="font-size:12px;color:var(--ink3);text-align:center;">Set your personal vault password. You will use this to unlock the shared credentials vault.</p>
         <input class="vault-pw-input" id="vault-new-pw1" type="password" placeholder="New vault password" style="width:100%;"/>
         <input class="vault-pw-input" id="vault-new-pw2" type="password" placeholder="Confirm password" style="width:100%;"/>
         <button class="vault-unlock-btn" style="width:100%" onclick="setVaultPw()">Set vault password</button>
@@ -642,7 +642,11 @@ async function launchApp(){
   document.getElementById('hd-role').textContent=roleLabel(role);
   document.getElementById('hd-av').textContent=(currentProfile.name||'?').charAt(0).toUpperCase();
   document.querySelectorAll('.admin-only').forEach(el=>el.style.display=isAdminPlus?'':'none');
-  try{const vsnap=await db.collection('config').doc('vault').get();if(vsnap.exists)sharedVaultHash=vsnap.data().passwordHash||null;}catch(e){}
+  // Load this user's personal vault password hash from their user doc
+  try{
+    const usnap=await db.collection('users').doc(currentUser.uid).get();
+    if(usnap.exists)sharedVaultHash=usnap.data().vaultPwHash||null;
+  }catch(e){}
   db.collection('users').onSnapshot(snap=>{
     allUsers=[];snap.forEach(d=>{const u={id:d.id,...d.data()};if(u.role!=='pending')allUsers.push(u);});
     if(document.getElementById('pane-admin').style.display!=='none')renderAdmin();
@@ -1043,19 +1047,22 @@ function renderVaultGate(){
   if(vaultUnlocked){gate.style.display='none';body.style.display='block';document.getElementById('change-vault-pw-btn').style.display=isSA?'':'none';renderCreds();return;}
   gate.style.display='flex';body.style.display='none';
   if(!hasPw){
-    if(isSA){document.getElementById('vault-gate-sub').textContent='Set a shared vault password for all admins.';setupWrap.style.display='flex';enterWrap.style.display='none';document.getElementById('vault-info').textContent='';}
-    else{document.getElementById('vault-gate-sub').textContent='Vault not configured yet.';setupWrap.style.display='none';enterWrap.style.display='none';document.getElementById('vault-info').textContent='Ask the super admin to set up the vault password first.';}
+    // Any admin can set their own vault password
+    document.getElementById('vault-gate-sub').textContent='You have not set your vault password yet.';
+    setupWrap.style.display='flex';enterWrap.style.display='none';
+    document.getElementById('vault-info').textContent='Set a personal password to unlock the shared credentials vault.';
   }else{
-    document.getElementById('vault-gate-sub').textContent='Enter the shared vault password.';setupWrap.style.display='none';enterWrap.style.display='flex';document.getElementById('vault-info').textContent='All admins use the same vault password.';
+    document.getElementById('vault-gate-sub').textContent='Enter your personal vault password to access shared credentials.';setupWrap.style.display='none';enterWrap.style.display='flex';document.getElementById('vault-info').textContent='Each admin sets their own password. The credentials inside are shared.';
   }
 }
 async function setVaultPw(){
   const p1=document.getElementById('vault-new-pw1').value,p2=document.getElementById('vault-new-pw2').value,err=document.getElementById('vault-err');
   if(!p1){err.textContent='Enter a password.';return;}if(p1!==p2){err.textContent='Passwords do not match.';return;}if(p1.length<4){err.textContent='At least 4 characters.';return;}
   const hash=await sha256(p1);
-  await db.collection('config').doc('vault').set({passwordHash:hash,setBy:currentProfile.name,setAt:new Date().toISOString()});
+  // Store each user's vault password hash in their own user document
+  await db.collection('users').doc(currentUser.uid).update({vaultPwHash:hash});
   sharedVaultHash=hash;err.textContent='';document.getElementById('vault-new-pw1').value='';document.getElementById('vault-new-pw2').value='';
-  vaultUnlocked=true;addLog('set vault password','');scheduleSave();renderVaultGate();showToast('Vault password set.');
+  vaultUnlocked=true;addLog('set their vault password','');scheduleSave();renderVaultGate();showToast('Vault password set.');
 }
 async function unlockVault(){
   const pw=document.getElementById('vault-pw-inp').value,err=document.getElementById('vault-err');
@@ -1066,9 +1073,9 @@ async function unlockVault(){
 }
 function lockVault(){vaultUnlocked=false;renderVaultGate();}
 function showChangeVaultPw(){
-  if(!confirm('Change the shared vault password?'))return;
+  if(!confirm('Change your vault password?'))return;
   vaultUnlocked=false;sharedVaultHash=null;
-  document.getElementById('vault-gate-sub').textContent='Set a new shared vault password.';
+  document.getElementById('vault-gate-sub').textContent='Set a new personal vault password.';
   document.getElementById('vault-setup-wrap').style.display='flex';document.getElementById('vault-enter-wrap').style.display='none';
   document.getElementById('vault-body').style.display='none';document.getElementById('vault-gate').style.display='flex';
   document.getElementById('vault-new-pw1').value='';document.getElementById('vault-new-pw2').value='';
@@ -1140,6 +1147,14 @@ function makeUserCard(u){
       if(u.role!=='superadmin')actions.appendChild(mkBtn('Remove','danger',()=>{if(confirm('Remove '+u.name+'?'))deleteUserDoc(u.id);}));
     }
     if((myRole==='superadmin'||myRole==='admin')&&u.role==='staff')actions.appendChild(mkBtn('Make admin','',()=>setRole(u.id,'admin')));
+    // Super admin can reset anyone's vault password
+    if(myRole==='superadmin'&&!isSelf&&u.role!=='pending'){
+      actions.appendChild(mkBtn('Reset vault pw','',async()=>{
+        if(!confirm('Reset vault password for '+u.name+'? They will need to set a new one.'))return;
+        await db.collection('users').doc(u.id).update({vaultPwHash:null});
+        addLog('reset vault password for',u.name);scheduleSave();showToast('Vault password reset for '+u.name+'.');
+      }));
+    }
   }
   card.appendChild(av);card.appendChild(info);card.appendChild(badge);card.appendChild(actions);return card;
 }
